@@ -3,6 +3,7 @@ package translator
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -38,7 +39,7 @@ func Translate(p *provider.Provider, apiURL, systemPrompt, text string) string {
 		return text
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 300 * time.Second}
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		req, err := p.BuildHTTPRequest(apiURL, jsonData)
@@ -61,7 +62,8 @@ func Translate(p *provider.Provider, apiURL, systemPrompt, text string) string {
 		} else if err != nil {
 			fmt.Printf("  ✗ Request error (attempt %d/%d): %v\n", attempt, maxRetries, err)
 		} else {
-			fmt.Printf("  ✗ API returned status %d (attempt %d/%d)\n", resp.StatusCode, attempt, maxRetries)
+			body, _ := io.ReadAll(resp.Body)
+			fmt.Printf("  ✗ API returned status %d (attempt %d/%d)\n  Response: %s\n", resp.StatusCode, attempt, maxRetries, string(body))
 			resp.Body.Close()
 		}
 

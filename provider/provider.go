@@ -70,7 +70,8 @@ func newGemini(apiKey string) *Provider {
 		EnvKey: "GEMINI_API_KEY",
 		APIKey: apiKey,
 		Models: []Model{
-			{Name: "gemini-2.5-flash", IsDefault: true},
+			{Name: "gemini-3-flash-preview", IsDefault: true},
+			{Name: "gemini-2.5-flash"},
 			{Name: "gemini-2.5-pro"},
 			{Name: "gemini-2.0-flash"},
 		},

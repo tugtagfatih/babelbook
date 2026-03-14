@@ -7,18 +7,38 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/tugtagfatih/babelbook/provider"
 	"github.com/tugtagfatih/babelbook/translator"
 )
 
-// translatableSelectors defines HTML elements whose text content should be translated.
-const translatableSelectors = "p, h1, h2, h3, h4, li, span"
+// =====================================================================
+// Rate Limit Configuration
+// =====================================================================
+// These values are tuned for the Gemini free/paid tier.
+// If you know your API rate limits, you can adjust these values:
+//
+//   maxChunkChars  - Characters per translation chunk. Increase for models
+//                    with higher output token limits. Decrease if you get
+//                    truncated translations. (Default: 50000 = ~12K tokens)
+//
+//   maxConcurrent  - Max parallel API requests at once. Should not exceed
+//                    your RPM (Requests Per Minute) limit divided by ~3.
+//                    Too high = 429 rate limit errors. (Default: 20)
+//
+// Current defaults are optimized for:
+//   RPM (Requests Per Minute) : 1,000
+//   TPM (Tokens Per Minute)   : 2,000,000
+//   RPD (Requests Per Day)    : 10,000
+// =====================================================================
 
-// rateLimitDelay is the pause between API calls to avoid rate limiting.
-const rateLimitDelay = 1 * time.Second
+// maxChunkChars is the maximum character count per translation chunk.
+const maxChunkChars = 50000
+
+// maxConcurrent is the maximum number of parallel API requests.
+const maxConcurrent = 20
 
 // FindFiles scans the given directory and returns a list of .epub filenames.
 func FindFiles(dir string) ([]string, error) {
@@ -110,39 +130,112 @@ func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, sy
 	return nil
 }
 
-// translateAndWriteHTML parses an HTML document, translates its content, and writes it to the zip.
+// splitBodyIntoChunks splits the body HTML into chunks at paragraph/heading boundaries.
+// Each chunk stays under maxChunkChars characters.
+func splitBodyIntoChunks(bodyHTML string) []string {
+	// Split tags to use as boundaries
+	splitTags := []string{"</p>", "</h1>", "</h2>", "</h3>", "</h4>", "</li>", "</div>"}
+
+	var chunks []string
+	remaining := bodyHTML
+
+	for len(remaining) > 0 {
+		if len(remaining) <= maxChunkChars {
+			chunks = append(chunks, remaining)
+			break
+		}
+
+		// Find the best split point: last closing tag before maxChunkChars
+		bestSplit := -1
+		for _, tag := range splitTags {
+			// Search for the tag within the first maxChunkChars characters
+			searchArea := remaining[:maxChunkChars]
+			idx := strings.LastIndex(searchArea, tag)
+			if idx > bestSplit {
+				bestSplit = idx + len(tag)
+			}
+		}
+
+		if bestSplit <= 0 {
+			// No good split point found, force split at maxChunkChars
+			bestSplit = maxChunkChars
+		}
+
+		chunks = append(chunks, remaining[:bestSplit])
+		remaining = remaining[bestSplit:]
+	}
+
+	return chunks
+}
+
+// translateAndWriteHTML splits the body into chapter-sized chunks and translates them concurrently.
 func translateAndWriteHTML(rc io.Reader, writer *zip.Writer, name string, p *provider.Provider, apiURL, systemPrompt string) error {
 	doc, err := goquery.NewDocumentFromReader(rc)
 	if err != nil {
 		return fmt.Errorf("failed to parse HTML %s: %w", name, err)
 	}
 
-	// Count translatable elements
-	elements := doc.Find(translatableSelectors)
-	totalElements := elements.Length()
-	translatedCount := 0
+	body := doc.Find("body")
+	if body.Length() == 0 {
+		fmt.Println("  ⚠ No <body> tag found, skipping")
+		htmlStr, _ := doc.Html()
+		fw, _ := writer.Create(name)
+		fw.Write([]byte(htmlStr))
+		return nil
+	}
 
-	elements.Each(func(i int, s *goquery.Selection) {
-		originalHTML, _ := s.Html()
-		if strings.TrimSpace(originalHTML) != "" {
-			translatedCount++
-			// Truncate preview to 50 chars for display
-			preview := strings.TrimSpace(originalHTML)
-			if len(preview) > 50 {
-				preview = preview[:50] + "..."
-			}
-			fmt.Printf("  🔄 Translating element %d/%d: %s\n", translatedCount, totalElements, preview)
+	bodyHTML, _ := body.Html()
+	totalChars := len(bodyHTML)
 
-			translatedHTML := translator.Translate(p, apiURL, systemPrompt, originalHTML)
-			s.SetHtml(translatedHTML)
+	if strings.TrimSpace(bodyHTML) == "" {
+		fmt.Println("  ⚠ Empty body, skipping")
+		htmlStr, _ := doc.Html()
+		fw, _ := writer.Create(name)
+		fw.Write([]byte(htmlStr))
+		return nil
+	}
 
-			fmt.Printf("  ⏳ Rate limit pause (%v)...\n", rateLimitDelay)
-			time.Sleep(rateLimitDelay)
-			fmt.Printf("  ✓ Element %d/%d done\n", translatedCount, totalElements)
-		}
-	})
+	// Split into chunks
+	chunks := splitBodyIntoChunks(bodyHTML)
+	totalChunks := len(chunks)
 
-	fmt.Printf("  ✅ File complete: %d elements translated\n", translatedCount)
+	fmt.Printf("  📊 Total: %d characters → split into %d chunks\n", totalChars, totalChunks)
+	fmt.Printf("  🚀 Sending %d chunks concurrently (max %d parallel)...\n", totalChunks, maxConcurrent)
+
+	// Translate all chunks concurrently
+	translatedChunks := make([]string, totalChunks)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	completed := 0
+
+	sem := make(chan struct{}, maxConcurrent)
+
+	for i, chunk := range chunks {
+		wg.Add(1)
+		go func(idx int, chunkHTML string) {
+			defer wg.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			chunkLen := len(chunkHTML)
+			translated := translator.Translate(p, apiURL, systemPrompt, chunkHTML)
+
+			mu.Lock()
+			translatedChunks[idx] = translated
+			completed++
+			fmt.Printf("  ✓ Chunk %d/%d done (%d chars)\n", completed, totalChunks, chunkLen)
+			mu.Unlock()
+		}(i, chunk)
+	}
+
+	wg.Wait()
+
+	// Reassemble translated body
+	translatedBody := strings.Join(translatedChunks, "")
+	body.SetHtml(translatedBody)
+
+	fmt.Printf("  ✅ File complete: %d chunks translated\n", totalChunks)
 
 	htmlStr, _ := doc.Html()
 	fileWriter, err := writer.Create(name)
