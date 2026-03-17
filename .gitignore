@@ -7,6 +7,9 @@ babelbook.exe
 *.exe
 dist/
 
+# Translation cache
+.babelbook_cache/
+
 # OS files
 .DS_Store
 Thumbs.db

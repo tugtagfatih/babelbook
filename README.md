@@ -6,116 +6,106 @@ It supports **Gemini**, **OpenAI**, and **Anthropic (Claude)** models out of the
 
 ## Features
 
-- **Multi-Provider AI Support**: Switch effortlessly between Gemini, OpenAI (ChatGPT), and Anthropic (Claude).
-- **Concurrent Translation**: Splits HTML content into chapter-sized chunks and translates them all in parallel for maximum speed.
-- **Format Preservation**: Preserves the internal HTML structure of EPUB files — translates only text content without breaking styling or layouts.
-- **Interactive CLI**: Easy-to-use terminal interface for selecting files, providers, models, and languages.
-- **Real-Time Progress**: Chunk-by-chunk progress tracking.
+- **Multi-Provider AI Support**: Switch between Gemini, OpenAI, and Anthropic.
+- **Bilingual Output**: Generate dual-language EPUBs with original text above and translation below — perfect for language learning.
+- **Resume Capability**: If translation is interrupted (network error, API limit), restart and it picks up exactly where it left off.
+- **Concurrent Translation**: Splits content into chunks and translates them all in parallel.
+- **TUI Settings Menu**: Adjust chunk size, parallelism, bilingual mode, and extra prompts without editing code.
+- **Custom Prompts**: Add translation instructions like "use formal tone" or "don't translate character names".
+- **Path Sanitization**: Handles EPUBs with unicode or special characters in filenames.
+- **Format Preservation**: Translates only text content — HTML structure, CSS, and images remain untouched.
 - **Resilience**: Built-in retry mechanism with detailed error reporting.
-- **Custom Models**: Plug in any provider-compatible model via the custom model entry flow.
 
 ---
 
 ## Installation
 
-Ensure you have [Go](https://go.dev/dl/) installed on your system.
-
 ```bash
-# Clone the repository
 git clone https://github.com/tugtagfatih/babelbook.git
 cd babelbook
-
-# Build the executable
 go build -o babelbook .
-
-# Or run directly
-go run .
 ```
 
-Pre-built binaries for Windows, Linux, and macOS are available on the [Releases](https://github.com/tugtagfatih/babelbook/releases) page.
+Pre-built binaries: [Releases](https://github.com/tugtagfatih/babelbook/releases)
 
 ---
 
 ## Configuration
 
-Babelbook relies on environment variables for API authentication.
-
-1. Copy the example configuration file:
-   ```bash
-   cp .env.example .env
-   ```
-2. Open `.env` and fill in one or more API keys:
+1. Copy the template: `cp .env.example .env`
+2. Add at least one API key:
    ```env
-   GEMINI_API_KEY=your_gemini_key_here
-   OPENAI_API_KEY=your_openai_key_here
-   ANTHROPIC_API_KEY=your_anthropic_key_here
+   GEMINI_API_KEY=your_key_here
+   OPENAI_API_KEY=your_key_here
+   ANTHROPIC_API_KEY=your_key_here
    ```
-> **Note:** You only need to provide the key for the provider you intend to use. If multiple keys are present, Babelbook will ask you to choose one at startup.
 
 ---
 
 ## Usage
 
-1. Place the `.epub` files you wish to translate into the project directory.
-2. Run the application:
-   ```bash
-   go run .
-   ```
-3. Follow the interactive prompts:
-   - Select your AI Provider (auto-selected if only one key is set).
-   - Select the model (default: `gemini-3-flash-preview`).
-   - Select the target `.epub` file.
-   - Enter your source and target languages.
-
-The translation begins immediately. A new file is generated with a language prefix (e.g., `TU_book.epub` for Turkish).
-
----
-
-## Rate Limits & Performance Tuning
-
-The default configuration is optimized for the following API limits:
-
-| Parameter | Default Value | Description |
-|-----------|--------------|-------------|
-| **RPM** (Requests Per Minute) | 1,000 | Max API calls per minute |
-| **TPM** (Tokens Per Minute) | 2,000,000 | Max tokens processed per minute |
-| **RPD** (Requests Per Day) | 10,000 | Max API calls per day |
-| **maxChunkChars** | 50,000 | Characters per translation chunk |
-| **maxConcurrent** | 20 | Parallel API requests at once |
-
-### How to customize
-
-If you know your API rate limits differ from the defaults, you can change them in [`epub/epub.go`](epub/epub.go):
-
-```go
-// Current defaults are optimized for:
-//   RPM (Requests Per Minute) : 1,000
-//   TPM (Tokens Per Minute)   : 2,000,000
-//   RPD (Requests Per Day)    : 10,000
-
-const maxChunkChars = 50000   // Characters per chunk
-const maxConcurrent = 20      // Parallel requests
+```bash
+go run .
+# or
+./babelbook
 ```
 
-**Examples:**
-- **Higher RPM (e.g. 10K RPM)**: Increase `maxConcurrent` to `100`
-- **Lower RPM (e.g. 15 RPM free tier)**: Decrease `maxConcurrent` to `2`
-- **Larger output token limit**: Increase `maxChunkChars` to `100000`
-- **Getting truncated translations**: Decrease `maxChunkChars` to `25000`
+### Interactive Flow
+1. Select AI provider (auto-selected if only one key exists)
+2. Select model (default: `gemini-3-flash-preview`)
+3. **Main Menu**: Start translation or open Settings
+4. Select EPUB file and languages
+5. Translation begins with real-time progress
 
-After changing, rebuild: `go build -o babelbook .`
+### Settings Menu
+Accessible from the main menu before starting translation:
+
+```
+⚙ Current Settings:
+  [1] Chunk size      : 50000 chars
+  [2] Max parallel    : 20 requests
+  [3] Bilingual mode  : OFF
+  [4] Extra prompt    : (none)
+  [0] ← Back
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Chunk size | 50,000 | Characters per API call. Decrease if translations get truncated |
+| Max parallel | 20 | Concurrent API requests. Increase for higher RPM tiers |
+| Bilingual | OFF | When ON, outputs both original and translated text |
+| Extra prompt | (none) | Custom instructions for the translator |
 
 ---
 
-## Supported Providers & Default Models
+## Rate Limits
 
-| Provider | Env Key | Default Model | Other Models |
-|----------|---------|---------------|--------------|
-| Gemini | `GEMINI_API_KEY` | `gemini-3-flash-preview` | gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash |
-| OpenAI | `OPENAI_API_KEY` | `gpt-4o` | gpt-4o-mini, o3-mini |
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` | claude-3-5-haiku |
+Defaults are optimized for: **1K RPM · 2M TPM · 10K RPD**
 
-You can also enter any custom model name via the "Custom" option in the model selection menu.
+Adjust via the Settings menu:
+- **Higher RPM** (e.g. 10K): Set max parallel to `100`
+- **Lower RPM** (e.g. 15 free tier): Set max parallel to `2`
+- **Larger output limit**: Increase chunk size to `100000`
+
+---
+
+## Resume (Cache)
+
+If translation is interrupted, simply run Babelbook again with the same file. It will:
+1. Detect the `.babelbook_cache/` directory
+2. Load previously translated chunks
+3. Only translate the remaining chunks
+4. Clean up cache after successful completion
+
+---
+
+## Supported Providers
+
+| Provider | Default Model | Other Models |
+|----------|---------------|--------------|
+| Gemini | `gemini-3-flash-preview` | gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash |
+| OpenAI | `gpt-4o` | gpt-4o-mini, o3-mini |
+| Anthropic | `claude-sonnet-4-20250514` | claude-3-5-haiku |
 
 ---
 
@@ -123,18 +113,16 @@ You can also enter any custom model name via the "Custom" option in the model se
 
 ```
 babelbook/
-├── main.go              # Entry point and orchestrator
-├── provider/            # AI provider definitions (Gemini, OpenAI, Anthropic)
-├── translator/          # Core translation logic with retries
-├── epub/                # EPUB reading, chunking, and writing
-├── config/              # Environment loading and validation
-├── ui/                  # Interactive CLI flows
-├── .env.example         # Template configuration file
-├── .github/workflows/   # CI/CD release pipeline
-└── README.md
+├── main.go              # Entry point
+├── settings/            # Runtime configuration struct
+├── provider/            # AI provider definitions
+├── translator/          # Translation logic with retries
+├── epub/                # EPUB reading, chunking, writing
+├── cache/               # Resume capability (disk cache)
+├── config/              # .env loading
+├── ui/                  # Interactive CLI + settings menu
+└── .github/workflows/   # CI/CD release pipeline
 ```
-
----
 
 ## License
 

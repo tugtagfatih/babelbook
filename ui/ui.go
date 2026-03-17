@@ -9,6 +9,7 @@ import (
 
 	"github.com/tugtagfatih/babelbook/config"
 	"github.com/tugtagfatih/babelbook/provider"
+	"github.com/tugtagfatih/babelbook/settings"
 )
 
 // PrintBanner displays the application header.
@@ -19,7 +20,6 @@ func PrintBanner() {
 }
 
 // SelectProvider prompts the user to choose an AI provider.
-// If only one is available, it auto-selects it.
 func SelectProvider(reader *bufio.Reader, providers []*provider.Provider) *provider.Provider {
 	if len(providers) == 1 {
 		fmt.Printf("✓ Provider auto-selected: %s\n", providers[0].Name)
@@ -48,8 +48,6 @@ func SelectProvider(reader *bufio.Reader, providers []*provider.Provider) *provi
 }
 
 // SelectModel prompts the user to choose a model from the provider's list.
-// The default model is pre-selected if the user presses Enter.
-// Includes a "Custom" option to enter a model name from .env.
 func SelectModel(reader *bufio.Reader, p *provider.Provider) string {
 	fmt.Printf("\nAvailable models for %s:\n", p.Name)
 	for i, m := range p.Models {
@@ -75,7 +73,6 @@ func SelectModel(reader *bufio.Reader, p *provider.Provider) string {
 	var idx int
 	fmt.Sscanf(input, "%d", &idx)
 
-	// Custom entry
 	if idx == customIdx {
 		return selectCustomModel(reader)
 	}
@@ -85,14 +82,11 @@ func SelectModel(reader *bufio.Reader, p *provider.Provider) string {
 		return p.Models[idx-1].Name
 	}
 
-	// Invalid → use default
 	defaultModel := p.DefaultModel()
 	fmt.Printf("Invalid selection, using default: %s\n", defaultModel)
 	return defaultModel
 }
 
-// selectCustomModel lets the user pick an API key from .env and enter a custom model name.
-// It returns the model name and updates the provider in-place via the returned provider.
 func selectCustomModel(reader *bufio.Reader) string {
 	fmt.Println("\n--- Custom Model Entry ---")
 	fmt.Println("Enter the model name (e.g. gemini-2.5-pro, gpt-4-turbo, claude-3-opus-20240229):")
@@ -106,8 +100,7 @@ func selectCustomModel(reader *bufio.Reader) string {
 	return modelName
 }
 
-// SelectCustomProvider guides the user through selecting an API key from .env
-// and creating a custom provider.
+// SelectCustomProvider guides the user through creating a custom provider.
 func SelectCustomProvider(reader *bufio.Reader) (*provider.Provider, string, bool) {
 	envLines, err := config.ReadEnvFile()
 	if err != nil {
@@ -115,7 +108,6 @@ func SelectCustomProvider(reader *bufio.Reader) (*provider.Provider, string, boo
 		return nil, "", false
 	}
 
-	// Show only lines that look like API keys
 	var keyLines []config.EnvLine
 	for _, line := range envLines {
 		if strings.Contains(strings.ToUpper(line.Key), "KEY") || strings.Contains(strings.ToUpper(line.Key), "API") {
@@ -123,7 +115,7 @@ func SelectCustomProvider(reader *bufio.Reader) (*provider.Provider, string, boo
 		}
 	}
 	if len(keyLines) == 0 {
-		keyLines = envLines // Show all if no KEY/API lines found
+		keyLines = envLines
 	}
 
 	fmt.Println("\nAPI keys found in .env:")
@@ -163,7 +155,6 @@ func SelectCustomProvider(reader *bufio.Reader) (*provider.Provider, string, boo
 	return p, modelName, true
 }
 
-// maskValue shows only the first 4 and last 4 characters of a value.
 func maskValue(val string) string {
 	if val == "" {
 		return "(empty)"
@@ -172,6 +163,112 @@ func maskValue(val string) string {
 		return "****"
 	}
 	return val[:4] + "..." + val[len(val)-4:]
+}
+
+// ShowMainMenu displays the main menu and returns the choice.
+// Returns "translate" or "settings".
+func ShowMainMenu(reader *bufio.Reader, s *settings.Settings) string {
+	for {
+		fmt.Println("\n┌──────────────────────────────┐")
+		fmt.Println("│  Main Menu                   │")
+		fmt.Println("├──────────────────────────────┤")
+		fmt.Println("│  [1] 📖 Start Translation    │")
+		fmt.Println("│  [2] ⚙  Settings             │")
+		fmt.Println("└──────────────────────────────┘")
+
+		fmt.Print("Select option [Default: 1]: ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		switch input {
+		case "", "1":
+			return "translate"
+		case "2":
+			ShowSettingsMenu(reader, s)
+		default:
+			fmt.Println("Invalid option.")
+		}
+	}
+}
+
+// ShowSettingsMenu displays and allows editing of translation settings.
+func ShowSettingsMenu(reader *bufio.Reader, s *settings.Settings) {
+	for {
+		bilingualStr := "OFF"
+		if s.Bilingual {
+			bilingualStr = "ON"
+		}
+		promptStr := "(none)"
+		if s.ExtraPrompt != "" {
+			display := s.ExtraPrompt
+			if len(display) > 40 {
+				display = display[:40] + "..."
+			}
+			promptStr = display
+		}
+
+		fmt.Println("\n┌──────────────────────────────────────────┐")
+		fmt.Println("│  ⚙ Settings                              │")
+		fmt.Println("├──────────────────────────────────────────┤")
+		fmt.Printf("│  [1] Chunk size      : %-18d│\n", s.MaxChunkChars)
+		fmt.Printf("│  [2] Max parallel    : %-18d│\n", s.MaxConcurrent)
+		fmt.Printf("│  [3] Bilingual mode  : %-18s│\n", bilingualStr)
+		fmt.Printf("│  [4] Extra prompt    : %-18s│\n", promptStr)
+		fmt.Println("│  [0] ← Back                              │")
+		fmt.Println("└──────────────────────────────────────────┘")
+
+		fmt.Print("Select option: ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		switch input {
+		case "0", "":
+			return
+		case "1":
+			fmt.Printf("Current: %d chars. Enter new value: ", s.MaxChunkChars)
+			val, _ := reader.ReadString('\n')
+			val = strings.TrimSpace(val)
+			var n int
+			if _, err := fmt.Sscanf(val, "%d", &n); err == nil && n > 0 {
+				s.MaxChunkChars = n
+				fmt.Printf("✓ Chunk size set to %d\n", n)
+			} else if val != "" {
+				fmt.Println("Invalid value, keeping current.")
+			}
+		case "2":
+			fmt.Printf("Current: %d requests. Enter new value: ", s.MaxConcurrent)
+			val, _ := reader.ReadString('\n')
+			val = strings.TrimSpace(val)
+			var n int
+			if _, err := fmt.Sscanf(val, "%d", &n); err == nil && n > 0 {
+				s.MaxConcurrent = n
+				fmt.Printf("✓ Max parallel set to %d\n", n)
+			} else if val != "" {
+				fmt.Println("Invalid value, keeping current.")
+			}
+		case "3":
+			s.Bilingual = !s.Bilingual
+			state := "OFF"
+			if s.Bilingual {
+				state = "ON"
+			}
+			fmt.Printf("✓ Bilingual mode: %s\n", state)
+		case "4":
+			fmt.Println("Enter extra prompt (e.g. 'Don't translate character names, use formal tone'):")
+			fmt.Println("(Enter empty line to clear)")
+			fmt.Print("> ")
+			val, _ := reader.ReadString('\n')
+			val = strings.TrimSpace(val)
+			s.ExtraPrompt = val
+			if val == "" {
+				fmt.Println("✓ Extra prompt cleared")
+			} else {
+				fmt.Printf("✓ Extra prompt set: %s\n", val)
+			}
+		default:
+			fmt.Println("Invalid option.")
+		}
+	}
 }
 
 // SelectFile displays a numbered list of files and prompts the user to choose one.
@@ -207,12 +304,22 @@ func PromptLanguage(reader *bufio.Reader, prompt, defaultVal string) string {
 }
 
 // PrintStartInfo displays the translation parameters before processing begins.
-func PrintStartInfo(providerName, model, sourceLang, inputFile, outputFile string) {
+func PrintStartInfo(providerName, model, sourceLang, inputFile, outputFile string, s *settings.Settings) {
+	bilingualStr := "No"
+	if s.Bilingual {
+		bilingualStr = "Yes (dual-language)"
+	}
 	fmt.Println("\n--------------------------------------------------")
-	fmt.Printf("  Provider : %s\n", providerName)
-	fmt.Printf("  Model    : %s\n", model)
-	fmt.Printf("  Source   : %s\n", sourceLang)
-	fmt.Printf("  File     : %s -> %s\n", inputFile, outputFile)
+	fmt.Printf("  Provider   : %s\n", providerName)
+	fmt.Printf("  Model      : %s\n", model)
+	fmt.Printf("  Source     : %s\n", sourceLang)
+	fmt.Printf("  File       : %s -> %s\n", inputFile, outputFile)
+	fmt.Printf("  Bilingual  : %s\n", bilingualStr)
+	fmt.Printf("  Chunk size : %d chars\n", s.MaxChunkChars)
+	fmt.Printf("  Parallel   : %d requests\n", s.MaxConcurrent)
+	if s.ExtraPrompt != "" {
+		fmt.Printf("  Extra      : %s\n", s.ExtraPrompt)
+	}
 	fmt.Println("--------------------------------------------------")
 }
 

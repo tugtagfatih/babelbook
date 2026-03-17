@@ -5,40 +5,21 @@ import (
 	"archive/zip"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/tugtagfatih/babelbook/cache"
 	"github.com/tugtagfatih/babelbook/provider"
+	"github.com/tugtagfatih/babelbook/settings"
 	"github.com/tugtagfatih/babelbook/translator"
 )
 
-// =====================================================================
-// Rate Limit Configuration
-// =====================================================================
-// These values are tuned for the Gemini free/paid tier.
-// If you know your API rate limits, you can adjust these values:
-//
-//   maxChunkChars  - Characters per translation chunk. Increase for models
-//                    with higher output token limits. Decrease if you get
-//                    truncated translations. (Default: 50000 = ~12K tokens)
-//
-//   maxConcurrent  - Max parallel API requests at once. Should not exceed
-//                    your RPM (Requests Per Minute) limit divided by ~3.
-//                    Too high = 429 rate limit errors. (Default: 20)
-//
-// Current defaults are optimized for:
-//   RPM (Requests Per Minute) : 1,000
-//   TPM (Tokens Per Minute)   : 2,000,000
-//   RPD (Requests Per Day)    : 10,000
-// =====================================================================
-
-// maxChunkChars is the maximum character count per translation chunk.
-const maxChunkChars = 50000
-
-// maxConcurrent is the maximum number of parallel API requests.
-const maxConcurrent = 20
+// translatableSelectors defines HTML elements whose text content should be translated.
+const translatableSelectors = "p, h1, h2, h3, h4, li, span"
 
 // FindFiles scans the given directory and returns a list of .epub filenames.
 func FindFiles(dir string) ([]string, error) {
@@ -57,7 +38,11 @@ func FindFiles(dir string) ([]string, error) {
 }
 
 // GenerateOutputFilename creates an output filename by prefixing the target language code.
-func GenerateOutputFilename(targetLang, inputFile string) string {
+// For bilingual mode, it uses "BI_" as prefix.
+func GenerateOutputFilename(targetLang, inputFile string, bilingual bool) string {
+	if bilingual {
+		return fmt.Sprintf("BI_%s", inputFile)
+	}
 	if len(targetLang) >= 2 {
 		prefix := strings.ToUpper(targetLang[:2])
 		return fmt.Sprintf("%s_%s", prefix, inputFile)
@@ -67,7 +52,8 @@ func GenerateOutputFilename(targetLang, inputFile string) string {
 
 // isHTMLFile checks whether a filename has an HTML or XHTML extension.
 func isHTMLFile(name string) bool {
-	return strings.HasSuffix(name, ".html") || strings.HasSuffix(name, ".xhtml")
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".xhtml")
 }
 
 // countHTMLFiles counts the number of HTML/XHTML files in an EPUB archive.
@@ -81,9 +67,33 @@ func countHTMLFiles(files []*zip.File) int {
 	return count
 }
 
+// sanitizePath normalizes file paths with special characters.
+func sanitizePath(name string) string {
+	parts := strings.Split(name, "/")
+	for i, part := range parts {
+		// Decode any existing percent-encoding, then re-encode safely
+		decoded, err := url.PathUnescape(part)
+		if err != nil {
+			decoded = part
+		}
+		// Only encode characters that are genuinely problematic
+		safe := ""
+		for _, ch := range decoded {
+			if ch > 127 || ch == '#' || ch == '?' || ch == '[' || ch == ']' {
+				safe += url.PathEscape(string(ch))
+			} else {
+				safe += string(ch)
+			}
+		}
+		parts[i] = safe
+	}
+	return strings.Join(parts, "/")
+}
+
 // TranslateEPUB reads the input EPUB, translates all HTML content, and writes the result.
-func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, systemPrompt string) error {
+func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, systemPrompt string, s *settings.Settings) error {
 	apiURL := p.BuildURL(model)
+	cacheDir := cache.Dir(inputPath)
 
 	reader, err := zip.OpenReader(inputPath)
 	if err != nil {
@@ -100,6 +110,15 @@ func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, sy
 	writer := zip.NewWriter(outputFile)
 	defer writer.Close()
 
+	// Build a mapping of original → sanitized file names
+	nameMap := make(map[string]string)
+	for _, file := range reader.File {
+		sanitized := sanitizePath(file.Name)
+		if sanitized != file.Name {
+			nameMap[file.Name] = sanitized
+		}
+	}
+
 	totalHTML := countHTMLFiles(reader.File)
 	processedHTML := 0
 
@@ -109,31 +128,62 @@ func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, sy
 			return fmt.Errorf("failed to open file %s in EPUB: %w", file.Name, err)
 		}
 
+		// Use sanitized name for output
+		outName := file.Name
+		if sanitized, ok := nameMap[file.Name]; ok {
+			outName = sanitized
+		}
+
 		if isHTMLFile(file.Name) {
 			processedHTML++
 			fmt.Printf("\n📄 Processing [%d/%d]: %s\n", processedHTML, totalHTML, file.Name)
 
-			if err := translateAndWriteHTML(rc, writer, file.Name, p, apiURL, systemPrompt); err != nil {
+			if err := translateAndWriteHTML(rc, writer, outName, file.Name, p, apiURL, systemPrompt, s, cacheDir, nameMap); err != nil {
 				rc.Close()
 				return err
 			}
 		} else {
-			fileWriter, err := writer.Create(file.Name)
+			fileWriter, err := writer.Create(outName)
 			if err != nil {
 				rc.Close()
-				return fmt.Errorf("failed to create entry %s: %w", file.Name, err)
+				return fmt.Errorf("failed to create entry %s: %w", outName, err)
 			}
 			io.Copy(fileWriter, rc)
 		}
 		rc.Close()
 	}
+
+	// Clean cache after successful completion
+	cache.Clean(cacheDir)
+	fmt.Println("\n🗑  Cache cleaned.")
+
 	return nil
 }
 
+// fixInternalLinks updates src/href attributes in HTML to match sanitized filenames.
+func fixInternalLinks(doc *goquery.Document, nameMap map[string]string) {
+	for original, sanitized := range nameMap {
+		// Only fix the basename part
+		origBase := filepath.Base(original)
+		sanitizedBase := filepath.Base(sanitized)
+		if origBase == sanitizedBase {
+			continue
+		}
+
+		doc.Find("[src], [href]").Each(func(_ int, sel *goquery.Selection) {
+			for _, attr := range []string{"src", "href"} {
+				val, exists := sel.Attr(attr)
+				if exists && strings.Contains(val, origBase) {
+					newVal := strings.Replace(val, origBase, sanitizedBase, 1)
+					sel.SetAttr(attr, newVal)
+				}
+			}
+		})
+	}
+}
+
 // splitBodyIntoChunks splits the body HTML into chunks at paragraph/heading boundaries.
-// Each chunk stays under maxChunkChars characters.
-func splitBodyIntoChunks(bodyHTML string) []string {
-	// Split tags to use as boundaries
+func splitBodyIntoChunks(bodyHTML string, maxChunkChars int) []string {
 	splitTags := []string{"</p>", "</h1>", "</h2>", "</h3>", "</h4>", "</li>", "</div>"}
 
 	var chunks []string
@@ -145,10 +195,8 @@ func splitBodyIntoChunks(bodyHTML string) []string {
 			break
 		}
 
-		// Find the best split point: last closing tag before maxChunkChars
 		bestSplit := -1
 		for _, tag := range splitTags {
-			// Search for the tag within the first maxChunkChars characters
 			searchArea := remaining[:maxChunkChars]
 			idx := strings.LastIndex(searchArea, tag)
 			if idx > bestSplit {
@@ -157,7 +205,6 @@ func splitBodyIntoChunks(bodyHTML string) []string {
 		}
 
 		if bestSplit <= 0 {
-			// No good split point found, force split at maxChunkChars
 			bestSplit = maxChunkChars
 		}
 
@@ -168,18 +215,24 @@ func splitBodyIntoChunks(bodyHTML string) []string {
 	return chunks
 }
 
-// translateAndWriteHTML splits the body into chapter-sized chunks and translates them concurrently.
-func translateAndWriteHTML(rc io.Reader, writer *zip.Writer, name string, p *provider.Provider, apiURL, systemPrompt string) error {
+// translateAndWriteHTML splits the body into chunks and translates them concurrently.
+// Supports resume from cache, bilingual output, and path sanitization.
+func translateAndWriteHTML(rc io.Reader, writer *zip.Writer, outName, originalName string, p *provider.Provider, apiURL, systemPrompt string, s *settings.Settings, cacheDir string, nameMap map[string]string) error {
 	doc, err := goquery.NewDocumentFromReader(rc)
 	if err != nil {
-		return fmt.Errorf("failed to parse HTML %s: %w", name, err)
+		return fmt.Errorf("failed to parse HTML %s: %w", originalName, err)
+	}
+
+	// Fix internal links to sanitized file names
+	if len(nameMap) > 0 {
+		fixInternalLinks(doc, nameMap)
 	}
 
 	body := doc.Find("body")
 	if body.Length() == 0 {
 		fmt.Println("  ⚠ No <body> tag found, skipping")
 		htmlStr, _ := doc.Html()
-		fw, _ := writer.Create(name)
+		fw, _ := writer.Create(outName)
 		fw.Write([]byte(htmlStr))
 		return nil
 	}
@@ -190,36 +243,53 @@ func translateAndWriteHTML(rc io.Reader, writer *zip.Writer, name string, p *pro
 	if strings.TrimSpace(bodyHTML) == "" {
 		fmt.Println("  ⚠ Empty body, skipping")
 		htmlStr, _ := doc.Html()
-		fw, _ := writer.Create(name)
+		fw, _ := writer.Create(outName)
 		fw.Write([]byte(htmlStr))
 		return nil
 	}
 
-	// Split into chunks
-	chunks := splitBodyIntoChunks(bodyHTML)
+	// Split into chunks using settings
+	chunks := splitBodyIntoChunks(bodyHTML, s.MaxChunkChars)
 	totalChunks := len(chunks)
 
-	fmt.Printf("  📊 Total: %d characters → split into %d chunks\n", totalChars, totalChunks)
-	fmt.Printf("  🚀 Sending %d chunks concurrently (max %d parallel)...\n", totalChunks, maxConcurrent)
+	fmt.Printf("  📊 Total: %d characters → %d chunks\n", totalChars, totalChunks)
+	fmt.Printf("  🚀 Translating (max %d parallel)...\n", s.MaxConcurrent)
 
-	// Translate all chunks concurrently
+	// Translate all chunks concurrently with cache support
 	translatedChunks := make([]string, totalChunks)
+	originalChunks := make([]string, totalChunks)
+	copy(originalChunks, chunks)
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	completed := 0
 
-	sem := make(chan struct{}, maxConcurrent)
+	sem := make(chan struct{}, s.MaxConcurrent)
 
 	for i, chunk := range chunks {
 		wg.Add(1)
 		go func(idx int, chunkHTML string) {
 			defer wg.Done()
 
+			// Check cache first
+			cached := cache.LoadChunk(cacheDir, originalName, idx)
+			if cached != "" {
+				mu.Lock()
+				translatedChunks[idx] = cached
+				completed++
+				fmt.Printf("  ⏩ Chunk %d/%d loaded from cache\n", completed, totalChunks)
+				mu.Unlock()
+				return
+			}
+
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			chunkLen := len(chunkHTML)
 			translated := translator.Translate(p, apiURL, systemPrompt, chunkHTML)
+
+			// Save to cache
+			cache.SaveChunk(cacheDir, originalName, idx, translated)
 
 			mu.Lock()
 			translatedChunks[idx] = translated
@@ -231,16 +301,28 @@ func translateAndWriteHTML(rc io.Reader, writer *zip.Writer, name string, p *pro
 
 	wg.Wait()
 
-	// Reassemble translated body
-	translatedBody := strings.Join(translatedChunks, "")
-	body.SetHtml(translatedBody)
+	// Build final body
+	var finalBody string
+	if s.Bilingual {
+		// Bilingual: original chunk + translated chunk with styling
+		for i := range chunks {
+			finalBody += originalChunks[i]
+			finalBody += `<div class="babelbook-translated" style="color:#555; border-left:3px solid #4a90d9; padding-left:10px; margin:8px 0; font-style:italic;">`
+			finalBody += translatedChunks[i]
+			finalBody += `</div>`
+		}
+	} else {
+		finalBody = strings.Join(translatedChunks, "")
+	}
+
+	body.SetHtml(finalBody)
 
 	fmt.Printf("  ✅ File complete: %d chunks translated\n", totalChunks)
 
 	htmlStr, _ := doc.Html()
-	fileWriter, err := writer.Create(name)
+	fileWriter, err := writer.Create(outName)
 	if err != nil {
-		return fmt.Errorf("failed to create entry %s: %w", name, err)
+		return fmt.Errorf("failed to create entry %s: %w", outName, err)
 	}
 	fileWriter.Write([]byte(htmlStr))
 	return nil

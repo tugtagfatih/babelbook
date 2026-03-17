@@ -17,17 +17,21 @@ const (
 )
 
 // BuildSystemPrompt creates the translation system instruction for the given language pair.
-func BuildSystemPrompt(sourceLang, targetLang string) string {
-	return fmt.Sprintf(`You are an award-winning literary translator and linguist. Your task is to translate the given %s text into %s.
+// If extraPrompt is non-empty, it is appended as an additional rule.
+func BuildSystemPrompt(sourceLang, targetLang, extraPrompt string) string {
+	prompt := fmt.Sprintf(`You are an award-winning literary translator and linguist. Your task is to translate the given %s text into %s.
 Rules:
 1. Produce fluent, natural translations that follow proper grammar rules.
 2. You may receive text containing HTML tags (e.g. <b>, <i>). Do NOT alter the tag structure.
 3. Return ONLY the translated text, do not add any comments.`, sourceLang, targetLang)
+
+	if extraPrompt != "" {
+		prompt += fmt.Sprintf("\n4. Additional instructions: %s", extraPrompt)
+	}
+	return prompt
 }
 
 // Translate sends text to the AI provider for translation and returns the result.
-// On failure after retries, it returns the original text unchanged.
-// Logs progress including retry attempts and wait times to the console.
 func Translate(p *provider.Provider, apiURL, systemPrompt, text string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
