@@ -166,15 +166,17 @@ func maskValue(val string) string {
 }
 
 // ShowMainMenu displays the main menu and returns the choice.
-// Returns "translate" or "settings".
-func ShowMainMenu(reader *bufio.Reader, s *settings.Settings) string {
+// Returns "translate", "settings", or "change_model".
+func ShowMainMenu(reader *bufio.Reader, s *settings.Settings, providerName, modelName string) string {
 	for {
-		fmt.Println("\n┌──────────────────────────────┐")
-		fmt.Println("│  Main Menu                   │")
-		fmt.Println("├──────────────────────────────┤")
-		fmt.Println("│  [1] 📖 Start Translation    │")
-		fmt.Println("│  [2] ⚙  Settings             │")
-		fmt.Println("└──────────────────────────────┘")
+		fmt.Printf("\n  🤖 Current: %s / %s\n", providerName, modelName)
+		fmt.Println("┌──────────────────────────────────┐")
+		fmt.Println("│  Main Menu                       │")
+		fmt.Println("├──────────────────────────────────┤")
+		fmt.Println("│  [1] 📖 Start Translation        │")
+		fmt.Println("│  [2] ⚙  Settings                 │")
+		fmt.Println("│  [3] 🔄 Change Provider / Model  │")
+		fmt.Println("└──────────────────────────────────┘")
 
 		fmt.Print("Select option [Default: 1]: ")
 		input, _ := reader.ReadString('\n')
@@ -185,6 +187,8 @@ func ShowMainMenu(reader *bufio.Reader, s *settings.Settings) string {
 			return "translate"
 		case "2":
 			ShowSettingsMenu(reader, s)
+		case "3":
+			return "change_model"
 		default:
 			fmt.Println("Invalid option.")
 		}
@@ -231,6 +235,7 @@ func ShowSettingsMenu(reader *bufio.Reader, s *settings.Settings) {
 			var n int
 			if _, err := fmt.Sscanf(val, "%d", &n); err == nil && n > 0 {
 				s.MaxChunkChars = n
+				s.Save()
 				fmt.Printf("✓ Chunk size set to %d\n", n)
 			} else if val != "" {
 				fmt.Println("Invalid value, keeping current.")
@@ -242,6 +247,7 @@ func ShowSettingsMenu(reader *bufio.Reader, s *settings.Settings) {
 			var n int
 			if _, err := fmt.Sscanf(val, "%d", &n); err == nil && n > 0 {
 				s.MaxConcurrent = n
+				s.Save()
 				fmt.Printf("✓ Max parallel set to %d\n", n)
 			} else if val != "" {
 				fmt.Println("Invalid value, keeping current.")
@@ -252,6 +258,7 @@ func ShowSettingsMenu(reader *bufio.Reader, s *settings.Settings) {
 			if s.Bilingual {
 				state = "ON"
 			}
+			s.Save()
 			fmt.Printf("✓ Bilingual mode: %s\n", state)
 		case "4":
 			fmt.Println("Enter extra prompt (e.g. 'Don't translate character names, use formal tone'):")
@@ -260,6 +267,7 @@ func ShowSettingsMenu(reader *bufio.Reader, s *settings.Settings) {
 			val, _ := reader.ReadString('\n')
 			val = strings.TrimSpace(val)
 			s.ExtraPrompt = val
+			s.Save()
 			if val == "" {
 				fmt.Println("✓ Extra prompt cleared")
 			} else {

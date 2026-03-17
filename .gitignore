@@ -10,6 +10,9 @@ dist/
 # Translation cache
 .babelbook_cache/
 
+# User preferences (saved provider/model/settings)
+.babelbook_prefs.json
+
 # OS files
 .DS_Store
 Thumbs.db
