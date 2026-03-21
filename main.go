@@ -17,14 +17,12 @@ import (
 )
 
 func main() {
-	// ---------------------------------------------------------------
-	// CLI Flags (non-interactive mode)
-	// ---------------------------------------------------------------
+	// CLI Flags
 	inputFlag := flag.String("input", "", "Input EPUB file path")
 	targetFlag := flag.String("target", "", "Target language (e.g. Turkish)")
-	sourceFlag := flag.String("source", "English", "Source language (default: English)")
-	bilingualFlag := flag.Bool("bilingual", false, "Generate bilingual (dual-language) EPUB")
-	glossaryFlag := flag.String("glossary", "", "Path to glossary file (term -> translation)")
+	sourceFlag := flag.String("source", "", "Source language (default: English)")
+	bilingualFlag := flag.Bool("bilingual", false, "Generate bilingual EPUB")
+	glossaryFlag := flag.String("glossary", "", "Path to glossary file")
 	batchFlag := flag.Bool("batch", false, "Translate all EPUB files in current directory")
 	flag.Parse()
 
@@ -33,24 +31,21 @@ func main() {
 	ui.PrintBanner()
 	reader := bufio.NewReader(os.Stdin)
 
-	// Load configuration and detect available providers
+	// Load config and settings
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal("Error: ", err)
 	}
-
-	// Load saved preferences
 	s := settings.Load()
 
-	// CLI flags override settings
 	if *bilingualFlag {
 		s.Bilingual = true
 	}
 
+	// Provider/model selection (saved or first-run)
 	var selectedProvider *provider.Provider
 	var selectedModel string
 
-	// Try to restore saved provider/model
 	if s.SavedProviderEnvKey != "" && s.SavedModel != "" {
 		for _, p := range cfg.Providers {
 			if p.EnvKey == s.SavedProviderEnvKey {
@@ -62,7 +57,6 @@ func main() {
 		}
 	}
 
-	// If no saved preference (first run), ask the user
 	if selectedProvider == nil {
 		selectedProvider = ui.SelectProvider(reader, cfg.Providers)
 		selectedModel = ui.SelectModel(reader, selectedProvider)
@@ -81,10 +75,9 @@ func main() {
 
 	provider.InjectModel(selectedProvider, selectedModel)
 
-	// Load glossary if specified or if glossary.txt exists
+	// Load glossary
 	glossaryPath := *glossaryFlag
 	if glossaryPath == "" {
-		// Auto-detect glossary.txt in current directory
 		if _, err := os.Stat("glossary.txt"); err == nil {
 			glossaryPath = "glossary.txt"
 		}
@@ -100,17 +93,13 @@ func main() {
 		}
 	}
 
-	// ---------------------------------------------------------------
-	// CLI Mode (non-interactive)
-	// ---------------------------------------------------------------
+	// CLI Mode
 	if cliMode {
-		runCLI(reader, selectedProvider, selectedModel, s, glossaryRules, *inputFlag, *sourceFlag, *targetFlag, *batchFlag)
+		runCLI(selectedProvider, selectedModel, s, glossaryRules, *inputFlag, *sourceFlag, *targetFlag, *batchFlag)
 		return
 	}
 
-	// ---------------------------------------------------------------
-	// Interactive Mode (TUI)
-	// ---------------------------------------------------------------
+	// TUI Mode — main menu
 	for {
 		choice := ui.ShowMainMenu(reader, s, selectedProvider.Name, selectedModel)
 		if choice == "translate" {
@@ -144,32 +133,54 @@ func main() {
 		return
 	}
 
-	// Batch mode from TUI
 	selectedFiles, batch := ui.SelectFileOrBatch(reader, epubFiles)
 	if len(selectedFiles) == 0 {
 		return
 	}
 
-	sourceLang := ui.PromptLanguage(reader, "Source language (e.g. English)", "English")
-	targetLang := ui.PromptLanguage(reader, "Target language (e.g. Turkish)", "Turkish")
+	// Language selection with memory
+	sourceDefault := "English"
+	if s.SavedSourceLang != "" {
+		sourceDefault = s.SavedSourceLang
+	}
+	targetDefault := "Turkish"
+	if s.SavedTargetLang != "" {
+		targetDefault = s.SavedTargetLang
+	}
+
+	sourceLang := ui.PromptLanguage(reader, "Source language", sourceDefault)
+	targetLang := ui.PromptLanguage(reader, "Target language", targetDefault)
+
+	// Save language choices
+	s.SavedSourceLang = sourceLang
+	s.SavedTargetLang = targetLang
+	s.Save()
 
 	for i, inputFile := range selectedFiles {
 		if batch {
 			fmt.Printf("\n📚 Book %d/%d: %s\n", i+1, len(selectedFiles), inputFile)
 		}
 
+		// Chapter selection (partial translation)
+		var skipChapters map[string]bool
+		if !batch {
+			chapters, err := epub.ListChapters(inputFile)
+			if err == nil && len(chapters) > 1 {
+				skipChapters = ui.SelectChapters(reader, chapters)
+			}
+		}
+
 		outputFile := epub.GenerateOutputFilename(targetLang, inputFile, s.Bilingual)
 		systemPrompt := translator.BuildSystemPrompt(sourceLang, targetLang, glossaryRules, s.ExtraPrompt)
 
-		// Cost estimation
-		showCostEstimate(inputFile, selectedProvider.Name, s)
+		showCostEstimate(inputFile, selectedProvider.Name, s, skipChapters)
 
 		if !batch || i == 0 {
 			ui.PrintStartInfo(selectedProvider.Name, selectedModel, sourceLang, inputFile, outputFile, s)
 			ui.ConfirmStart(reader)
 		}
 
-		if err := epub.TranslateEPUB(inputFile, outputFile, selectedProvider, selectedModel, systemPrompt, s); err != nil {
+		if err := epub.TranslateEPUB(inputFile, outputFile, selectedProvider, selectedModel, systemPrompt, s, skipChapters); err != nil {
 			fmt.Printf("✗ Translation failed for %s: %v\n", inputFile, err)
 			continue
 		}
@@ -179,8 +190,10 @@ func main() {
 	ui.PauseBeforeExit(reader)
 }
 
-// runCLI handles non-interactive command-line execution.
-func runCLI(reader *bufio.Reader, p *provider.Provider, model string, s *settings.Settings, glossaryRules, inputFile, sourceLang, targetLang string, batch bool) {
+func runCLI(p *provider.Provider, model string, s *settings.Settings, glossaryRules, inputFile, sourceLang, targetLang string, batch bool) {
+	if sourceLang == "" {
+		sourceLang = "English"
+	}
 	if targetLang == "" {
 		targetLang = "Turkish"
 	}
@@ -208,9 +221,9 @@ func runCLI(reader *bufio.Reader, p *provider.Provider, model string, s *setting
 		outputFile := epub.GenerateOutputFilename(targetLang, f, s.Bilingual)
 		systemPrompt := translator.BuildSystemPrompt(sourceLang, targetLang, glossaryRules, s.ExtraPrompt)
 
-		showCostEstimate(f, p.Name, s)
+		showCostEstimate(f, p.Name, s, nil)
 
-		if err := epub.TranslateEPUB(f, outputFile, p, model, systemPrompt, s); err != nil {
+		if err := epub.TranslateEPUB(f, outputFile, p, model, systemPrompt, s, nil); err != nil {
 			fmt.Printf("✗ Failed: %s — %v\n", f, err)
 			continue
 		}
@@ -218,9 +231,8 @@ func runCLI(reader *bufio.Reader, p *provider.Provider, model string, s *setting
 	}
 }
 
-// showCostEstimate analyzes the EPUB and prints a cost estimate.
-func showCostEstimate(inputFile, providerName string, s *settings.Settings) {
-	totalChars, totalChunks, err := epub.AnalyzeEPUB(inputFile, s.MaxChunkChars)
+func showCostEstimate(inputFile, providerName string, s *settings.Settings, skipChapters map[string]bool) {
+	totalChars, totalChunks, err := epub.AnalyzeEPUB(inputFile, s.MaxChunkChars, skipChapters)
 	if err != nil {
 		return
 	}
@@ -230,6 +242,8 @@ func showCostEstimate(inputFile, providerName string, s *settings.Settings) {
 	fmt.Printf("  💰 Estimate: ~%dk tokens, %d chunks", inputTokens/1000, totalChunks)
 	if providerName == "Gemini" {
 		fmt.Printf(" (free tier / ~$%.4f)\n", costUSD)
+	} else if providerName == "Local AI" {
+		fmt.Printf(" (local — free)\n")
 	} else {
 		fmt.Printf(" (~$%.2f)\n", costUSD)
 	}

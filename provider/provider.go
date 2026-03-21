@@ -292,6 +292,60 @@ func parseAnthropicResponse(body io.Reader) (string, error) {
 }
 
 // -------------------------------------------------------------------
+// Local AI (Ollama, LMStudio, any OpenAI-compatible server)
+// -------------------------------------------------------------------
+
+func newLocalAI(baseURL string) *Provider {
+	// Normalize: strip trailing slash
+	for len(baseURL) > 0 && baseURL[len(baseURL)-1] == '/' {
+		baseURL = baseURL[:len(baseURL)-1]
+	}
+	return &Provider{
+		Name:   "Local AI",
+		EnvKey: "LOCAL_AI_URL",
+		APIKey: baseURL, // We store the URL in APIKey field
+		Models: []Model{
+			{Name: "auto", IsDefault: true},
+		},
+		buildURL: func(storedURL, _ string) string {
+			// Append /chat/completions if not already present
+			url := storedURL
+			if !contains(url, "/chat/completions") {
+				if !contains(url, "/v1") {
+					url += "/v1"
+				}
+				url += "/chat/completions"
+			}
+			return url
+		},
+		buildReq: buildOpenAIRequest, // OpenAI-compatible format
+		parseRes: parseOpenAIResponse,
+		buildHTTP: func(apiURL, _ string, jsonData []byte) (*http.Request, error) {
+			// No auth header needed for local servers
+			req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			return req, nil
+		},
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchString(s, substr)
+}
+
+func searchString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// -------------------------------------------------------------------
 // Registry: detect available providers from environment
 // -------------------------------------------------------------------
 
@@ -303,6 +357,7 @@ var knownProviderKeys = []struct {
 	{"GEMINI_API_KEY", newGemini},
 	{"OPENAI_API_KEY", newOpenAI},
 	{"ANTHROPIC_API_KEY", newAnthropic},
+	{"LOCAL_AI_URL", newLocalAI},
 }
 
 // DetectProviders reads the environment and returns providers that have API keys set.
@@ -346,7 +401,7 @@ func InjectModel(p *Provider, model string) {
 			return nil, err
 		}
 		// For providers that need a "model" field in the JSON body
-		if p.Name == "OpenAI" || p.Name == "Anthropic" || p.Name == "Custom" {
+		if p.Name == "OpenAI" || p.Name == "Anthropic" || p.Name == "Custom" || p.Name == "Local AI" {
 			var raw map[string]interface{}
 			json.Unmarshal(data, &raw)
 			raw["model"] = model

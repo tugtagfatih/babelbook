@@ -2,20 +2,22 @@
 
 Babelbook is a fast, concurrent, multi-provider AI-powered CLI tool that translates EPUB books into any language while preserving HTML formatting.
 
-Supports **Gemini**, **OpenAI**, and **Anthropic** out of the box.
+Supports **Gemini**, **OpenAI**, **Anthropic**, and **Local AI** (Ollama, LMStudio, any OpenAI-compatible server).
 
 ## Features
 
-- 🤖 **Multi-Provider AI** — Gemini, OpenAI, Anthropic with one-click switching
+- 🤖 **Multi-Provider** — Gemini, OpenAI, Anthropic, Local AI (Ollama/LMStudio)
+- 🦙 **Local AI** — Translate offline with your own GPU — no API key, no limits, free
 - 📖 **Bilingual Output** — Dual-language EPUBs for language learning
+- 🎯 **Partial Translation** — Select specific chapters to translate, skip the rest
 - 💾 **Resume Capability** — Interrupted translations pick up where they left off
 - 📊 **Progress Bar** — Visual progress with ETA across all chunks
 - 📚 **Batch Translation** — Translate all EPUBs in a folder at once
-- 📖 **Glossary** — Define terms for consistent translations (e.g. character names)
+- 📖 **Glossary** — Define terms for consistent translations
 - 💰 **Cost Estimation** — See estimated tokens and cost before translating
-- ⚙️ **TUI Settings** — Adjust chunk size, parallelism, bilingual, extra prompt
-- 🖥️ **CLI Flags** — Non-interactive mode for scripts and automation
-- ✏️ **Custom Prompts** — "Use formal tone", "Don't translate names", etc.
+- ⚙️ **TUI Settings** — Chunk size, parallelism, bilingual, extra prompt (auto-saved)
+- 🖥️ **CLI Flags** — Non-interactive mode for automation
+- 🧠 **Remember Everything** — Provider, model, and languages saved between sessions
 - 🔧 **Path Sanitization** — Handles unicode/special chars in EPUB filenames
 - 🛡️ **Resilient** — Auto-retry with detailed error reporting
 
@@ -36,115 +38,94 @@ Pre-built binaries: [Releases](https://github.com/tugtagfatih/babelbook/releases
 
 ## Configuration
 
-Add at least one API key to `.env`:
+Add at least one API key or local server URL to `.env`:
 ```env
 GEMINI_API_KEY=your_key_here
 OPENAI_API_KEY=your_key_here
 ANTHROPIC_API_KEY=your_key_here
+
+# Local AI (Ollama, LMStudio, or any OpenAI-compatible server)
+LOCAL_AI_URL=http://localhost:11434    # Ollama
+# LOCAL_AI_URL=http://localhost:1234   # LMStudio
 ```
+
+---
+
+## Local AI Setup
+
+### Ollama
+```bash
+# Install: https://ollama.com
+ollama pull llama3.1
+# Add to .env: LOCAL_AI_URL=http://localhost:11434
+```
+
+### LMStudio
+1. Download from [lmstudio.ai](https://lmstudio.ai)
+2. Load a model and start the server
+3. Add to `.env`: `LOCAL_AI_URL=http://localhost:1234`
+
+### Any OpenAI-compatible server
+Set `LOCAL_AI_URL` to your server's base URL. Babelbook will auto-append `/v1/chat/completions`.
+
+When selecting a Local AI model, choose "Custom" and enter your model name (e.g. `llama3.1`, `mistral`, `gemma`).
 
 ---
 
 ## Usage
 
-### Interactive Mode (TUI)
+### Interactive Mode
 ```bash
 go run .
-# or
-./babelbook
 ```
 
-1. Provider & model auto-loaded (or selected on first run)
-2. **Main Menu**: Start translation, Settings, or Change model
+1. Provider & model auto-loaded (saved from last session)
+2. **Main Menu**: Start translation / Settings / Change model
 3. Select file (or **[A] Translate ALL** for batch)
-4. Choose languages → see cost estimate → translate with progress bar
+4. Choose languages (remembered from last session)
+5. **Select chapters** (translate specific ones or all)
+6. See cost estimate → translate with progress bar
 
-### CLI Mode (Automation)
+### CLI Mode
 ```bash
-# Single file
 babelbook --input "book.epub" --target "Turkish"
-
-# Batch (all EPUBs in current dir)
-babelbook --batch --target "Turkish"
-
-# With options
-babelbook --input "book.epub" --target "Turkish" --bilingual --glossary "glossary.txt"
+babelbook --batch --target "Turkish" --bilingual
+babelbook --input "book.epub" --target "Turkish" --glossary "glossary.txt"
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--input` | Input EPUB file |
-| `--target` | Target language (e.g. Turkish) |
+| `--target` | Target language |
 | `--source` | Source language (default: English) |
-| `--bilingual` | Generate dual-language EPUB |
-| `--batch` | Translate all EPUBs in current directory |
+| `--bilingual` | Dual-language output |
+| `--batch` | Translate all EPUBs |
 | `--glossary` | Path to glossary file |
-
-### Settings Menu
-```
-⚙ Current Settings:
-  [1] Chunk size      : 50000 chars
-  [2] Max parallel    : 20 requests
-  [3] Bilingual mode  : OFF
-  [4] Extra prompt    : (none)
-  [0] ← Back
-```
-
-All settings are automatically saved across sessions.
 
 ---
 
 ## Glossary
 
-Create a `glossary.txt` in the same directory (auto-detected) or pass with `--glossary`:
-
+Create `glossary.txt` (auto-detected) or pass with `--glossary`:
 ```
-# Character names — don't translate
+# Don't translate character names
 John -> John
 Hogwarts -> Hogwarts
 
 # Custom translations
 Wand -> Asa
-Stormlight -> Fırtınaışığı
 ```
-
-Format: `source -> target` (one per line, `#` for comments)
-
----
-
-## Cost Estimation
-
-Before translation starts, Babelbook shows:
-```
-💰 Estimate: ~125k tokens, 12 chunks (free tier / ~$0.0125)
-```
-
-| Provider | Input $/1M | Output $/1M |
-|----------|-----------|-------------|
-| Gemini   | $0.10     | $0.40       |
-| OpenAI   | $2.50     | $10.00      |
-| Anthropic| $3.00     | $15.00      |
-
----
-
-## Rate Limits
-
-Defaults optimized for: **1K RPM · 2M TPM · 10K RPD**
-
-Adjust via Settings menu:
-- **Higher RPM**: Increase max parallel
-- **Lower RPM**: Decrease max parallel
-- **Larger output limit**: Increase chunk size
 
 ---
 
 ## Supported Providers
 
-| Provider | Default Model | Others |
-|----------|---------------|--------|
-| Gemini | `gemini-3-flash-preview` | gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash |
-| OpenAI | `gpt-4o` | gpt-4o-mini, o3-mini |
-| Anthropic | `claude-sonnet-4-20250514` | claude-3-5-haiku |
+| Provider | Env Variable | Default Model |
+|----------|-------------|---------------|
+| Gemini | `GEMINI_API_KEY` | gemini-3-flash-preview |
+| OpenAI | `OPENAI_API_KEY` | gpt-4o |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514 |
+| Local AI | `LOCAL_AI_URL` | auto (enter your model name) |
 
 ---
 
@@ -153,16 +134,16 @@ Adjust via Settings menu:
 ```
 babelbook/
 ├── main.go              # Entry + CLI flags
-├── settings/            # Persistent settings
-├── provider/            # AI providers
+├── settings/            # Persistent settings (JSON)
+├── provider/            # AI providers (Gemini, OpenAI, Anthropic, Local AI)
 ├── translator/          # Translation + cost estimation
-├── epub/                # EPUB I/O + chunking
+├── epub/                # EPUB I/O + chunking + chapter listing
 ├── cache/               # Resume capability
 ├── glossary/            # Term mapping
 ├── progress/            # Visual progress bar
 ├── config/              # .env loading
-├── ui/                  # Interactive CLI
-└── .github/workflows/   # CI/CD
+├── ui/                  # Interactive CLI + settings menu
+└── .github/workflows/   # CI/CD release pipeline
 ```
 
 ## License

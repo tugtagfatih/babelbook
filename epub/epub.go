@@ -64,6 +64,23 @@ func countHTMLFiles(files []*zip.File) int {
 	return count
 }
 
+// ListChapters opens an EPUB and returns the list of HTML/XHTML file names inside it.
+func ListChapters(inputPath string) ([]string, error) {
+	reader, err := zip.OpenReader(inputPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open EPUB: %w", err)
+	}
+	defer reader.Close()
+
+	var chapters []string
+	for _, f := range reader.File {
+		if isHTMLFile(f.Name) {
+			chapters = append(chapters, f.Name)
+		}
+	}
+	return chapters, nil
+}
+
 // sanitizePath normalizes file paths with special characters.
 func sanitizePath(name string) string {
 	parts := strings.Split(name, "/")
@@ -86,7 +103,8 @@ func sanitizePath(name string) string {
 }
 
 // AnalyzeEPUB scans an EPUB file and returns total character count and total HTML chunks.
-func AnalyzeEPUB(inputPath string, maxChunkChars int) (totalChars int, totalChunks int, err error) {
+// skipChapters contains file names to exclude from analysis.
+func AnalyzeEPUB(inputPath string, maxChunkChars int, skipChapters map[string]bool) (totalChars int, totalChunks int, err error) {
 	reader, err := zip.OpenReader(inputPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to open EPUB: %w", err)
@@ -94,7 +112,7 @@ func AnalyzeEPUB(inputPath string, maxChunkChars int) (totalChars int, totalChun
 	defer reader.Close()
 
 	for _, file := range reader.File {
-		if !isHTMLFile(file.Name) {
+		if !isHTMLFile(file.Name) || skipChapters[file.Name] {
 			continue
 		}
 		rc, err := file.Open()
@@ -123,7 +141,8 @@ func AnalyzeEPUB(inputPath string, maxChunkChars int) (totalChars int, totalChun
 }
 
 // TranslateEPUB reads the input EPUB, translates all HTML content, and writes the result.
-func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, systemPrompt string, s *settings.Settings) error {
+// skipChapters contains file names to exclude from translation (copied as-is).
+func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, systemPrompt string, s *settings.Settings, skipChapters map[string]bool) error {
 	apiURL := p.BuildURL(model)
 	cacheDir := cache.Dir(inputPath)
 
@@ -154,7 +173,7 @@ func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, sy
 	// Count total chunks for global progress bar
 	totalChunksGlobal := 0
 	for _, file := range reader.File {
-		if !isHTMLFile(file.Name) {
+		if !isHTMLFile(file.Name) || skipChapters[file.Name] {
 			continue
 		}
 		rc, _ := file.Open()
@@ -193,7 +212,7 @@ func TranslateEPUB(inputPath, outputPath string, p *provider.Provider, model, sy
 			outName = sanitized
 		}
 
-		if isHTMLFile(file.Name) {
+		if isHTMLFile(file.Name) && !skipChapters[file.Name] {
 			processedHTML++
 			fmt.Printf("\n📄 [%d/%d] %s\n", processedHTML, totalHTML, file.Name)
 

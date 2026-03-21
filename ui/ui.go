@@ -320,6 +320,57 @@ func PromptLanguage(reader *bufio.Reader, prompt, defaultVal string) string {
 	return input
 }
 
+// SelectChapters lets the user choose which chapters to translate.
+// Returns a map of chapter names to skip. Empty map means translate all.
+func SelectChapters(reader *bufio.Reader, chapters []string) map[string]bool {
+	if len(chapters) <= 1 {
+		return nil
+	}
+
+	fmt.Println("\nChapters found in EPUB:")
+	for i, ch := range chapters {
+		fmt.Printf("  [%d] %s\n", i+1, ch)
+	}
+	fmt.Printf("  [A] Translate ALL (%d chapters)\n", len(chapters))
+	fmt.Println("\nEnter chapter numbers to translate (comma-separated), or A for all:")
+	fmt.Print("Selection [Default: A]: ")
+
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+
+	if input == "" || strings.ToUpper(input) == "A" {
+		fmt.Printf("✓ All %d chapters selected\n", len(chapters))
+		return nil
+	}
+
+	// Parse selected indices
+	selected := make(map[int]bool)
+	parts := strings.Split(input, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		var idx int
+		if _, err := fmt.Sscanf(part, "%d", &idx); err == nil && idx > 0 && idx <= len(chapters) {
+			selected[idx-1] = true
+		}
+	}
+
+	if len(selected) == 0 {
+		fmt.Printf("✓ All %d chapters selected\n", len(chapters))
+		return nil
+	}
+
+	// Build skip map (everything NOT selected)
+	skip := make(map[string]bool)
+	for i, ch := range chapters {
+		if !selected[i] {
+			skip[ch] = true
+		}
+	}
+
+	fmt.Printf("✓ %d of %d chapters selected for translation\n", len(selected), len(chapters))
+	return skip
+}
+
 // PrintStartInfo displays the translation parameters before processing begins.
 func PrintStartInfo(providerName, model, sourceLang, inputFile, outputFile string, s *settings.Settings) {
 	bilingualStr := "No"

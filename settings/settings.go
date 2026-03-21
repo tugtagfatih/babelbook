@@ -27,6 +27,12 @@ type Settings struct {
 
 	// SavedModel is the last used model name (e.g. "gemini-3-flash-preview").
 	SavedModel string `json:"saved_model"`
+
+	// SavedSourceLang is the last used source language.
+	SavedSourceLang string `json:"saved_source_lang"`
+
+	// SavedTargetLang is the last used target language.
+	SavedTargetLang string `json:"saved_target_lang"`
 }
 
 // Default returns the default settings.
