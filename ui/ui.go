@@ -279,25 +279,34 @@ func ShowSettingsMenu(reader *bufio.Reader, s *settings.Settings) {
 	}
 }
 
-// SelectFile displays a numbered list of files and prompts the user to choose one.
-func SelectFile(files []string) (string, error) {
+// SelectFileOrBatch displays files and offers single or batch selection.
+// Returns selected file(s) and whether batch mode was chosen.
+func SelectFileOrBatch(reader *bufio.Reader, files []string) ([]string, bool) {
 	fmt.Println("\nSelect a file to translate:")
 	for i, file := range files {
 		fmt.Printf("  [%d] %s\n", i+1, file)
 	}
-
-	var fileIndex int
-	for {
-		fmt.Print("File number: ")
-		var input string
-		fmt.Scanln(&input)
-		fmt.Sscanf(input, "%d", &fileIndex)
-		if fileIndex > 0 && fileIndex <= len(files) {
-			break
-		}
-		fmt.Println("Invalid selection, please enter a number from the list.")
+	if len(files) > 1 {
+		fmt.Printf("  [A] 📚 Translate ALL (%d files)\n", len(files))
 	}
-	return files[fileIndex-1], nil
+
+	for {
+		fmt.Print("Selection: ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		if strings.ToUpper(input) == "A" && len(files) > 1 {
+			fmt.Printf("✓ Batch mode: %d files selected\n", len(files))
+			return files, true
+		}
+
+		var idx int
+		fmt.Sscanf(input, "%d", &idx)
+		if idx > 0 && idx <= len(files) {
+			return []string{files[idx-1]}, false
+		}
+		fmt.Println("Invalid selection.")
+	}
 }
 
 // PromptLanguage asks the user for a language name with a default fallback.

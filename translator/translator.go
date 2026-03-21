@@ -16,17 +16,22 @@ const (
 	retryDelay = 3 * time.Second
 )
 
-// BuildSystemPrompt creates the translation system instruction for the given language pair.
-// If extraPrompt is non-empty, it is appended as an additional rule.
-func BuildSystemPrompt(sourceLang, targetLang, extraPrompt string) string {
+// BuildSystemPrompt creates the translation system instruction.
+// glossaryRules and extraPrompt are optional (pass "" to skip).
+func BuildSystemPrompt(sourceLang, targetLang, glossaryRules, extraPrompt string) string {
 	prompt := fmt.Sprintf(`You are an award-winning literary translator and linguist. Your task is to translate the given %s text into %s.
 Rules:
 1. Produce fluent, natural translations that follow proper grammar rules.
 2. You may receive text containing HTML tags (e.g. <b>, <i>). Do NOT alter the tag structure.
 3. Return ONLY the translated text, do not add any comments.`, sourceLang, targetLang)
 
+	ruleNum := 4
+	if glossaryRules != "" {
+		prompt += fmt.Sprintf("\n%d. %s", ruleNum, glossaryRules)
+		ruleNum++
+	}
 	if extraPrompt != "" {
-		prompt += fmt.Sprintf("\n4. Additional instructions: %s", extraPrompt)
+		prompt += fmt.Sprintf("\n%d. Additional instructions: %s", ruleNum, extraPrompt)
 	}
 	return prompt
 }
@@ -78,4 +83,35 @@ func Translate(p *provider.Provider, apiURL, systemPrompt, text string) string {
 	}
 	fmt.Println("  ⚠ All retries exhausted, keeping original text")
 	return text
+}
+
+// EstimateCost gives a rough cost estimate based on character count and provider.
+func EstimateCost(totalChars int, providerName string) (inputTokens int, outputTokens int, costUSD float64) {
+	// Rough token estimate: 1 token ≈ 4 characters
+	inputTokens = totalChars / 4
+	// Output is roughly same size as input for translation
+	outputTokens = inputTokens
+
+	// Pricing per 1M tokens (as of 2025)
+	var inputPricePerM, outputPricePerM float64
+	switch providerName {
+	case "Gemini":
+		// Gemini Flash models are very cheap / free tier
+		inputPricePerM = 0.10
+		outputPricePerM = 0.40
+	case "OpenAI":
+		// GPT-4o pricing
+		inputPricePerM = 2.50
+		outputPricePerM = 10.00
+	case "Anthropic":
+		// Claude Sonnet pricing
+		inputPricePerM = 3.00
+		outputPricePerM = 15.00
+	default:
+		inputPricePerM = 1.00
+		outputPricePerM = 3.00
+	}
+
+	costUSD = (float64(inputTokens)/1_000_000)*inputPricePerM + (float64(outputTokens)/1_000_000)*outputPricePerM
+	return
 }

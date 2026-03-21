@@ -1,0 +1,10 @@
+# Babelbook Glossary File
+# Format: source -> target
+# Lines starting with # are comments
+# The glossary ensures consistent translation of specific terms.
+
+# Example entries (uncomment and modify):
+# Stormlight -> Fırtınaışığı
+# Wand -> Asa
+# Hogwarts -> Hogwarts
+# John -> John
